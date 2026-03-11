@@ -340,11 +340,24 @@
   }
 
   // ---- Enviar evento ----
-  function sendEvent(payload) {
-    log('Enviando evento:', payload.event, payload);
+  // urgent=true usa sendBeacon primeiro (garante envio durante navegacao/submit)
+  function sendEvent(payload, urgent) {
+    log('Enviando evento:', payload.event, urgent ? '(urgent)' : '', payload);
     var json = JSON.stringify(payload);
 
-    // Preferir fetch (suporta Content-Type: application/json)
+    // Para form submits: sendBeacon primeiro (sobrevive a navegacao)
+    if (urgent) {
+      try {
+        if (navigator.sendBeacon) {
+          var blob = new Blob([json], { type: 'application/json' });
+          var sent = navigator.sendBeacon(ENDPOINT, blob);
+          log('sendBeacon:', sent ? 'OK' : 'falhou');
+          if (sent) return;
+        }
+      } catch(e) {}
+    }
+
+    // fetch com keepalive
     try {
       fetch(ENDPOINT, {
         method: 'POST',
@@ -356,13 +369,13 @@
       return;
     } catch(e) {}
 
-    // Fallback: sendBeacon com Blob (para garantir content-type correto)
+    // Fallback: sendBeacon com Blob
     try {
       if (navigator.sendBeacon) {
-        var blob = new Blob([json], { type: 'application/json' });
-        var sent = navigator.sendBeacon(ENDPOINT, blob);
-        log('sendBeacon:', sent ? 'OK' : 'falhou');
-        if (sent) return;
+        var blob2 = new Blob([json], { type: 'application/json' });
+        var sent2 = navigator.sendBeacon(ENDPOINT, blob2);
+        log('sendBeacon fallback:', sent2 ? 'OK' : 'falhou');
+        if (sent2) return;
       }
     } catch(e) {}
 
@@ -437,33 +450,45 @@
     log('Evento enviado e marcado:', stage);
   }
 
-  // Capturar dados de formulario no click do botao de submit
+  // Capturar dados de formulario
   function trackFormSubmit(stage) {
     if (alreadySent(stage + '_listener')) return;
     markSent(stage + '_listener');
 
-    // Escutar clicks em botoes de submit
+    function trySend() {
+      if (alreadySent(stage)) return;
+      var userData = scrapeUserData();
+      if (Object.keys(userData).length === 0) return;
+      log('Form submit detectado:', stage, userData);
+      var payload = buildPayload(stage, [], 0);
+      sendEvent(payload, true);
+      markSent(stage);
+    }
+
+    // 1. Click em qualquer botao/link que pareca submit
     document.addEventListener('click', function(e) {
-      var btn = e.target.closest('button, [type="submit"], a');
+      var btn = e.target.closest('button, [type="submit"], a, [role="button"]');
       if (!btn) return;
       var text = (btn.innerText || '').toLowerCase().trim();
       var isSubmit = text.indexOf('entrar') !== -1 || text.indexOf('login') !== -1 ||
-                     text.indexOf('cadastrar') !== -1 || text.indexOf('criar conta') !== -1 ||
-                     text.indexOf('continuar') !== -1 || text.indexOf('enviar') !== -1 ||
-                     btn.type === 'submit';
+                     text.indexOf('acessar') !== -1 || text.indexOf('cadastrar') !== -1 ||
+                     text.indexOf('criar conta') !== -1 || text.indexOf('continuar') !== -1 ||
+                     text.indexOf('enviar') !== -1 || btn.type === 'submit';
       if (!isSubmit) return;
-
-      var userData = scrapeUserData();
-      if (Object.keys(userData).length === 0) return;
-      if (alreadySent(stage)) return;
-
-      log('Form submit detectado:', stage, userData);
-      var payload = buildPayload(stage, [], 0);
-      sendEvent(payload);
-      markSent(stage);
+      trySend();
     }, true);
 
-    log('Listener de form submit instalado para:', stage);
+    // 2. Form submit nativo
+    document.addEventListener('submit', function() {
+      trySend();
+    }, true);
+
+    // 3. Fallback: beforeunload (usuario sai da pagina com dados preenchidos)
+    window.addEventListener('beforeunload', function() {
+      trySend();
+    });
+
+    log('Listeners instalados para:', stage);
   }
 
   // ---- Init com delay para React renderizar ----
