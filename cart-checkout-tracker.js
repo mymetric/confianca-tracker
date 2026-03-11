@@ -50,6 +50,10 @@
       return 'view_cart';
     }
 
+    // Login / Cadastro (captura de lead)
+    if (path.indexOf('/login') !== -1) return 'login';
+    if (path.indexOf('/cadastro') !== -1) return 'sign_up';
+
     return null;
   }
 
@@ -280,9 +284,33 @@
     return '';
   }
 
+  // ---- Capturar dados dos formularios ----
+  function scrapeUserData() {
+    var fields = {
+      email:    ['#email', '#login', 'input[type="email"]', 'input[autocomplete="email"]'],
+      name:     ['#fullName', '#name', 'input[autocomplete="name"]'],
+      phone:    ['#phone', '#telefone', 'input[type="tel"]', 'input[autocomplete="tel"]'],
+      cpf:      ['#cpf', 'input[name="cpf"]'],
+    };
+    var data = {};
+    for (var key in fields) {
+      var sels = fields[key];
+      for (var i = 0; i < sels.length; i++) {
+        try {
+          var el = document.querySelector(sels[i]);
+          if (el && el.value && el.value.trim().length > 2) {
+            data[key] = el.value.trim();
+            break;
+          }
+        } catch(e) {}
+      }
+    }
+    return data;
+  }
+
   // ---- Montar payload ----
   function buildPayload(eventName, items, total) {
-    return {
+    var payload = {
       event: eventName,
       timestamp: new Date().toISOString(),
       source: SOURCE,
@@ -301,6 +329,14 @@
       referrer: document.referrer,
       screen: window.innerWidth + 'x' + window.innerHeight
     };
+
+    // Adicionar dados do usuario se disponiveis
+    var userData = scrapeUserData();
+    if (Object.keys(userData).length > 0) {
+      payload.user = userData;
+    }
+
+    return payload;
   }
 
   // ---- Enviar evento ----
@@ -371,6 +407,12 @@
       return;
     }
 
+    // Login/cadastro: capturar no submit (inputs so tem valor apos preencher)
+    if (stage === 'login' || stage === 'sign_up') {
+      trackFormSubmit(stage);
+      return;
+    }
+
     if (alreadySent(stage)) {
       log('Evento ja enviado nesta sessao:', stage);
       return;
@@ -393,6 +435,35 @@
     sendEvent(payload);
     markSent(stage);
     log('Evento enviado e marcado:', stage);
+  }
+
+  // Capturar dados de formulario no click do botao de submit
+  function trackFormSubmit(stage) {
+    if (alreadySent(stage + '_listener')) return;
+    markSent(stage + '_listener');
+
+    // Escutar clicks em botoes de submit
+    document.addEventListener('click', function(e) {
+      var btn = e.target.closest('button, [type="submit"], a');
+      if (!btn) return;
+      var text = (btn.innerText || '').toLowerCase().trim();
+      var isSubmit = text.indexOf('entrar') !== -1 || text.indexOf('login') !== -1 ||
+                     text.indexOf('cadastrar') !== -1 || text.indexOf('criar conta') !== -1 ||
+                     text.indexOf('continuar') !== -1 || text.indexOf('enviar') !== -1 ||
+                     btn.type === 'submit';
+      if (!isSubmit) return;
+
+      var userData = scrapeUserData();
+      if (Object.keys(userData).length === 0) return;
+      if (alreadySent(stage)) return;
+
+      log('Form submit detectado:', stage, userData);
+      var payload = buildPayload(stage, [], 0);
+      sendEvent(payload);
+      markSent(stage);
+    }, true);
+
+    log('Listener de form submit instalado para:', stage);
   }
 
   // ---- Init com delay para React renderizar ----
