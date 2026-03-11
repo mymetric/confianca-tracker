@@ -25,34 +25,68 @@
   }
 
   // ---- Deteccao de etapa do funil ----
+  // OCC Confianca: checkout acontece dentro de /carrinho e /checkout
+  // Sem login, /checkout redireciona para /{cidade}/carrinho
+  // Com login, as etapas aparecem via step indicators no DOM
   function detectStage() {
     var path = location.pathname.toLowerCase();
-    var body = (document.body && document.body.innerText || '').toLowerCase();
+    var title = (document.title || '').toLowerCase();
 
     // Confirmacao de pedido
-    if (path.indexOf('/confirmacao') !== -1 || path.indexOf('/order-confirmation') !== -1 ||
-        body.indexOf('pedido realizado') !== -1 || body.indexOf('compra finalizada') !== -1 ||
-        body.indexOf('obrigado pela compra') !== -1 || body.indexOf('pedido confirmado') !== -1) {
+    if (path.indexOf('/confirmacao') !== -1 || path.indexOf('/order-confirmation') !== -1) {
       return 'purchase';
     }
 
-    // Checkout (OCC usa /checkout ou /carrinho com etapas internas)
+    // Detectar etapa ativa via step indicators no DOM (checkout com login)
+    var activeStep = detectActiveStep();
+    if (activeStep) return activeStep;
+
+    // Checkout URL explicita
     if (path.indexOf('/checkout') !== -1) {
-      if (body.indexOf('pagamento') !== -1 || body.indexOf('pix') !== -1 ||
-          body.indexOf('cartao de credito') !== -1 || body.indexOf('cartão') !== -1 ||
-          body.indexOf('forma de pagamento') !== -1) return 'add_payment_info';
-      if (body.indexOf('entrega') !== -1 || body.indexOf('retirar na loja') !== -1 ||
-          body.indexOf('frete') !== -1 || body.indexOf('endereco') !== -1 ||
-          body.indexOf('endereço') !== -1) return 'add_shipping_info';
       return 'begin_checkout';
     }
 
-    // Carrinho
+    // Carrinho (URL /carrinho ou /{cidade}/carrinho)
     if (path.indexOf('/carrinho') !== -1 || path.indexOf('/cart') !== -1) {
-      if (body.indexOf('pagamento') !== -1 && body.indexOf('forma de pagamento') !== -1) return 'add_payment_info';
-      if (body.indexOf('entrega') !== -1 && (body.indexOf('retirar') !== -1 || body.indexOf('frete') !== -1)) return 'add_shipping_info';
-      if (body.indexOf('identificação') !== -1 || body.indexOf('identificacao') !== -1) return 'begin_checkout';
+      // Se o title indica checkout, considerar begin_checkout
+      if (title.indexOf('checkout') !== -1 || title.indexOf('finalizar') !== -1) {
+        return 'begin_checkout';
+      }
       return 'view_cart';
+    }
+
+    return null;
+  }
+
+  // Detectar etapa ativa via elementos do DOM (step bar, tabs, headings de etapa)
+  function detectActiveStep() {
+    // Buscar headings ou elementos ativos que indiquem a etapa
+    var indicators = [
+      { sel: '[class*="step"][class*="active"], [class*="Step"][class*="Active"], [aria-selected="true"], [aria-current="step"]', key: 'text' },
+      { sel: 'h1, h2, h3', key: 'text' }
+    ];
+
+    for (var i = 0; i < indicators.length; i++) {
+      try {
+        var els = document.querySelectorAll(indicators[i].sel);
+        for (var j = 0; j < els.length; j++) {
+          var text = (els[j].innerText || '').toLowerCase().trim();
+          if (!text || text.length > 100) continue;
+          var rect = els[j].getBoundingClientRect();
+          if (rect.width < 10) continue;
+
+          // Pagamento
+          if (text.indexOf('pagamento') !== -1 || text.indexOf('forma de pagamento') !== -1 ||
+              text === 'payment') return 'add_payment_info';
+          // Entrega
+          if (text === 'entrega' || text.indexOf('tipo de entrega') !== -1 ||
+              text.indexOf('endereco de entrega') !== -1 || text.indexOf('endereço de entrega') !== -1 ||
+              text === 'shipping') return 'add_shipping_info';
+          // Confirmacao
+          if (text.indexOf('confirmar pedido') !== -1 || text.indexOf('resumo do pedido') !== -1 ||
+              text.indexOf('pedido realizado') !== -1 || text.indexOf('obrigado') !== -1) return 'purchase';
+        }
+      } catch(e) {}
     }
 
     return null;
@@ -294,30 +328,37 @@
   // ---- Enviar evento ----
   function sendEvent(payload) {
     log('Enviando evento:', payload.event, payload);
+    var json = JSON.stringify(payload);
 
+    // Preferir fetch (suporta Content-Type: application/json)
+    try {
+      fetch(ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: json,
+        keepalive: true
+      }).then(function(r) { log('fetch status:', r.status); })
+        .catch(function() { log('fetch falhou'); });
+      return;
+    } catch(e) {}
+
+    // Fallback: sendBeacon com Blob (para garantir content-type correto)
     try {
       if (navigator.sendBeacon) {
-        var sent = navigator.sendBeacon(ENDPOINT, JSON.stringify(payload));
+        var blob = new Blob([json], { type: 'application/json' });
+        var sent = navigator.sendBeacon(ENDPOINT, blob);
         log('sendBeacon:', sent ? 'OK' : 'falhou');
         if (sent) return;
       }
     } catch(e) {}
 
+    // Ultimo fallback: XHR
     try {
-      fetch(ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        keepalive: true
-      }).catch(function() {});
-    } catch(e) {
-      try {
-        var xhr = new XMLHttpRequest();
-        xhr.open('POST', ENDPOINT, true);
-        xhr.setRequestHeader('Content-Type', 'application/json');
-        xhr.send(JSON.stringify(payload));
-      } catch(e2) {}
-    }
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', ENDPOINT, true);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.send(json);
+    } catch(e2) {}
   }
 
   // ---- Dedup via sessionStorage ----
