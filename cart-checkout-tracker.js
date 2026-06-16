@@ -17,11 +17,30 @@
 
   var ENDPOINT = 'https://events.mymetric.app/posts';
   var SOURCE = 'confianca.com.br';
+  var EVENT_NAME = 'confianca_occ_cart'; // event_name no hub (antes caia como o dominio "confianca.com.br")
   var STORAGE_KEY = '__confianca_cart_tracker';
   var DEBUG = false;
 
   function log() {
     if (DEBUG) console.log.apply(console, ['[CartTracker]'].concat(Array.prototype.slice.call(arguments)));
+  }
+
+  // ---- Cookie mm_tracker (gerado pelo mmtracker_occ.js) ----
+  function getCookie(name) {
+    var value = '; ' + document.cookie;
+    var parts = value.split('; ' + name + '=');
+    if (parts.length === 2) return parts.pop().split(';').shift();
+    return '';
+  }
+
+  // Le o cookie mm_tracker {client_id, session_id, fbp, ...} pra atribuicao
+  function getMmTracker() {
+    try {
+      var raw = getCookie('mm_tracker');
+      if (!raw) return null;
+      try { raw = decodeURIComponent(raw); } catch(e) {}
+      return JSON.parse(raw);
+    } catch(e) { return null; }
   }
 
   // ---- Deteccao de etapa do funil ----
@@ -311,9 +330,12 @@
   // ---- Montar payload ----
   function buildPayload(eventName, items, total) {
     var payload = {
+      event_name: EVENT_NAME,
       event: eventName,
       timestamp: new Date().toISOString(),
-      source: SOURCE,
+      source: EVENT_NAME,
+      domain: SOURCE,
+      mm_tracker: getMmTracker(),
       page_url: location.href,
       page_title: document.title,
       city: getCity(),
